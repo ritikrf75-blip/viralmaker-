@@ -79,7 +79,7 @@ export default function App() {
   const drawCanvas = (index: number) => {
     const canvas = canvasRefs.current[index];
     const post = generatedPosts[index];
-    if (!canvas || !post) return;
+    if (!canvas || !post || !post.imageUrl) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -138,29 +138,64 @@ export default function App() {
       ctx.textBaseline = 'top';
       wrapText(ctx, post.content.bottom_text, 40, 1100, width - 80, 55);
       
-      // Update data URL for download
-      const newData = [...generatedPosts];
-      newData[index].canvasDataUrl = canvas.toDataURL('image/png');
-      setGeneratedPosts(newData);
+      // Update data URL for download using functional state update to avoid race conditions
+      setGeneratedPosts(prev => {
+        const next = [...prev];
+        if (next[index]) {
+          next[index] = { ...next[index], canvasDataUrl: canvas.toDataURL('image/png') };
+        }
+        return next;
+      });
     };
     img.src = post.imageUrl;
   };
 
   useEffect(() => {
+    // Only trigger drawing for posts that have an image but haven't been processed into a data URL yet
     generatedPosts.forEach((post, idx) => {
       if (post.imageUrl && !post.canvasDataUrl) {
         drawCanvas(idx);
       }
     });
-  }, [generatedPosts]);
+  }, [generatedPosts.map(p => p.imageUrl).join(',')]); // Dependency on the image URLs specifically
 
   const downloadImage = (index: number) => {
-    const post = generatedPosts[index];
-    if (!post.canvasDataUrl) return;
-    const link = document.createElement('a');
-    link.download = `viral_post_${index + 1}.png`;
-    link.href = post.canvasDataUrl;
-    link.click();
+    const canvas = canvasRefs.current[index];
+    if (!canvas) return;
+    
+    try {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          alert('Bhai, image generate nahi ho payi. Ek baar phir try karo.');
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `viral_post_${index + 1}.png`;
+        
+        // Append to body to ensure it works in all browsers
+        document.body.appendChild(link);
+        link.click();
+        
+        // Cleanup
+        setTimeout(() => {
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }, 100);
+      }, 'image/png');
+    } catch (err) {
+      console.error('Download failed:', err);
+      // Fallback for tainted canvas or other issues
+      const dataUrl = canvas.toDataURL('image/png');
+      const win = window.open();
+      if (win) {
+        win.document.write(`<img src="${dataUrl}" style="max-width:100%;" />`);
+        win.document.write('<p>Right-click or Long-press to save image</p>');
+      } else {
+        alert('Download blocked. Please right-click the image and select "Save Image As".');
+      }
+    }
   };
 
   return (
@@ -358,6 +393,15 @@ export default function App() {
                         ref={el => canvasRefs.current[idx] = el}
                         className="w-full h-full object-contain"
                       />
+                      {/* Transparent overlay image for native long-press saving */}
+                      {post.canvasDataUrl && (
+                        <img 
+                          src={post.canvasDataUrl} 
+                          alt="Generated Post"
+                          className="absolute inset-0 w-full h-full object-contain opacity-0 z-10 cursor-pointer"
+                          onContextMenu={(e) => e.stopPropagation()}
+                        />
+                      )}
                       {!post.canvasDataUrl && (
                         <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center">
                           <Loader2 className="w-8 h-8 text-yellow-400 animate-spin" />
